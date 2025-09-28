@@ -6,6 +6,13 @@ provide a lightweight utility for stress-testing GPU memory consumption without
 requiring any pretrained weights or external datasets.
 """
 
+import os
+import sys
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 import paddle
 
 from paddleseg.models import OCRNet
@@ -56,7 +63,7 @@ def main():
 
     optimizer = paddle.optimizer.Adam(learning_rate=0.001,
                                       parameters=model.parameters())
-    criterion = paddle.nn.CrossEntropyLoss(ignore_index=255)
+    criterion = paddle.nn.CrossEntropyLoss(ignore_index=255, axis=1)
 
     for epoch in range(1):
         for step, (images, labels) in enumerate(dataset):
