@@ -144,3 +144,124 @@ python tools/predict.py \
 ```
 
 我们建议你参照RGB颜色数值对照表来设置`--custom_color`。
+
+## 示例：从数据到可视化分析的完整流程
+
+下面给出一个以视盘分割数据集为例的端到端示例，展示如何完成“数据准备 → 网络训练 → 网络推理 → 结果分析（热力图、分割结果、混淆矩阵）”的完整可视化流程。
+
+### 1. 数据准备
+
+```bash
+# 下载并解压示例数据集
+mkdir -p data
+cd data
+wget https://paddleseg.bj.bcebos.com/dataset/optic_disc_seg.zip
+unzip optic_disc_seg.zip
+cd ..
+```
+
+数据集中已经包含`train_list.txt`、`val_list.txt`和`test_list.txt`等文件，可直接用于训练、验证与测试。
+
+### 2. 网络训练
+
+```bash
+python tools/train.py \
+       --config configs/quick_start/pp_liteseg_optic_disc_512x512_1k.yml \
+       --do_eval \
+       --use_vdl \
+       --save_dir output
+```
+
+训练完成后，最佳模型权重将保存在`output/best_model/model.pdparams`中。
+
+### 3. 网络推理
+
+```bash
+python tools/predict.py \
+       --config configs/quick_start/pp_liteseg_optic_disc_512x512_1k.yml \
+       --model_path output/best_model/model.pdparams \
+       --image_path data/optic_disc_seg/JPEGImages/H0002.jpg \
+       --save_dir output/analysis/predict
+```
+
+上述命令会生成叠加原图的分割效果(`added_prediction`)以及伪彩色掩膜(`pseudo_color_prediction`)。
+
+### 4. 结果分析与可视化
+
+下面的示例脚本展示如何在推理结果的基础上生成概率热力图以及混淆矩阵。请先安装可视化依赖：
+
+```bash
+pip install matplotlib scikit-learn
+```
+
+然后执行：
+
+```python
+import os
+import numpy as np
+import paddle
+import paddle.nn.functional as F
+from sklearn.metrics import confusion_matrix
+
+import paddleseg.transforms as T
+from paddleseg.cvlibs import Config, SegBuilder
+from paddleseg.utils import utils, visualize
+
+cfg = Config('configs/quick_start/pp_liteseg_optic_disc_512x512_1k.yml')
+builder = SegBuilder(cfg)
+model = builder.model
+utils.load_entire_model(model, 'output/best_model/model.pdparams')
+model.eval()
+
+image_path = 'data/optic_disc_seg/JPEGImages/H0002.jpg'
+label_path = 'data/optic_disc_seg/Annotations/H0002.png'
+
+# 构建与验证阶段一致的预处理流程
+pred_transforms = T.Compose([
+    T.Resize(target_size=(512, 512)),
+    T.Normalize()
+])
+
+sample = {
+    'img': image_path,
+    'label': label_path,
+    'trans_info': [],
+    'gt_fields': ['label']
+}
+sample = pred_transforms(sample)
+image = paddle.to_tensor(sample['img'][np.newaxis, :])
+label = sample['label'][0]
+
+with paddle.no_grad():
+    logits = model(image)
+
+probs = F.softmax(logits, axis=1)[0].numpy()
+pred_mask = probs.argmax(axis=0).astype('uint8')
+
+save_dir = 'output/analysis'
+os.makedirs(save_dir, exist_ok=True)
+
+# 生成分割叠加图
+color_map = visualize.get_color_map_list(2)
+visualize.visualize(image_path, pred_mask, color_map, save_dir=os.path.join(save_dir, 'overlay'))
+
+# 生成分割热力图（以第1类为例）
+heatmap_path = os.path.join(save_dir, 'heatmap.png')
+from matplotlib import pyplot as plt
+plt.imsave(heatmap_path, probs[1], cmap='jet')
+
+# 计算混淆矩阵
+gt_mask = label.astype('uint8')
+valid = gt_mask != 255
+cm = confusion_matrix(gt_mask[valid].ravel(), pred_mask[valid].ravel(), labels=list(range(2)))
+np.savetxt(os.path.join(save_dir, 'confusion_matrix.csv'), cm, fmt='%d', delimiter=',')
+print('可视化结果保存在:', save_dir)
+```
+
+脚本将生成如下内容：
+
+- `output/analysis/overlay/`：叠加原图的分割可视化结果。
+- `output/analysis/heatmap.png`：目标类别的概率热力图，可用于观察模型关注区域。
+- `output/analysis/confusion_matrix.csv`：数值化的混淆矩阵，便于进一步统计分析。
+
+通过上述示例，用户可以快速了解如何在PaddleSeg中完成从模型训练到可视化分析的全流程操作。
